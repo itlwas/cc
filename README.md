@@ -1,11 +1,10 @@
 # 🚀 cc - Ultimate, Ultra-Optimized Cat Replacement
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/cc/actions)
-[![Version](https://img.shields.io/badge/version-1.0-blue.svg)](https://github.com/itlwas/cc/releases)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/itlwas/cc.svg?style=social)](https://github.com/itlwas/cc/stargazers)
-[![Forks](https://img.shields.io/github/forks/itlwas/cc.svg?style=social)](https://github.com/itlwas/cc/network)
-
+[![Version](https://img.shields.io/badge/version-1.0-blue.svg)](https://github.com/itlwas/cc/releases)
+[![Stars](https://img.shields.io/github/stars/itlwas/cc.svg)](https://github.com/itlwas/cc/stargazers)
+[![Forks](https://img.shields.io/github/forks/itlwas/cc.svg)](https://github.com/itlwas/cc/network)
 
 ---
 
