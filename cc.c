@@ -1,5 +1,5 @@
 /*
- * cc - Ultimate, Ultra-Optimized Cat Replacement (Version 1.0)
+ * cc - Ultimate, Ultra-Optimized Cat Replacement (Version 1.1)
  *
  * This utility concatenates files to standard output while providing enhanced
  * text processing and additional features expected by experienced developers.
@@ -7,20 +7,19 @@
  * Features:
  *   - Fast, raw file output with minimal overhead.
  *   - Enhanced text formatting:
- *       - Numbering all lines (-n)
- *       - Numbering nonblank lines (-b)
- *       - Squeezing repeated blank lines (-s)
- *       - Displaying end-of-line markers (-e)
- *       - Visualizing TAB characters as "^I" (-T)
- *       - Converting nonprinting characters (-v)
+ *       - Number all lines (-n)
+ *       - Number nonblank lines (-b)
+ *       - Squeeze repeated blank lines (-s)
+ *       - Display end-of-line markers (-e)
+ *       - Visualize TAB characters as "^I" (-T)
+ *       - Convert nonprinting characters (-v)
  *       - The -A flag is equivalent to -v -T -e.
  *   - Follow mode (-f): Continuously output appended data (tail -f style).
  *
  * Performance:
- *   - Uses an increased buffer (8192 bytes) to reduce system calls.
+ *   - Uses a larger buffer (8192 bytes) to reduce system calls.
  *   - Memory mapping is employed for files ≥1MB to avoid extra copying.
- *   - A fast path in text processing bypasses character-by-character handling
- *     when no transformations are needed.
+ *   - A fast path in text processing bypasses per-character handling when possible.
  *
  * Usage: cc [OPTION]... [FILE]...
  * If FILE is "-" or omitted, input is read from standard input.
@@ -30,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #ifdef _WIN32
   #include <windows.h>
   #include <io.h>
@@ -42,13 +42,12 @@
   #include <unistd.h>
 #endif
 
-/* Macro for detailed error reporting */
-#define REPORT_ERROR(msg) \
-    fprintf(stderr, "[%s:%d %s] ERROR: %s: %s\n", __FILE__, __LINE__, __func__, (msg), strerror(errno))
-
+/* Buffer size for I/O */
 #define BUFSIZE 8192
-#define MMAP_THRESHOLD (1024 * 1024)  /* 1MB threshold for memory mapping */
+/* 1MB threshold for memory mapping */
+#define MMAP_THRESHOLD (1024 * 1024)
 
+/* Options structure */
 typedef struct {
     int flag_num;         /* -n: number all lines */
     int flag_nnb;         /* -b: number nonblank lines */
@@ -64,15 +63,25 @@ typedef struct {
 } Options;
 
 /* Global default options */
-const Options global_defaults = {
+static const Options global_defaults = {
     .flag_num = 0, .flag_nnb = 0, .flag_squeeze = 0, .flag_ends = 0,
     .flag_tabs = 0, .flag_nonprinting = 0, .flag_follow = 0,
     .squeeze_limit = 1,
     .line_format = "%6d\t", .tab_repr = "^I", .end_marker = "$"
 };
 
+/* Centralized error logging.
+ * If fatal is non-zero, the program exits immediately.
+ */
+static void log_error(const char *msg, int fatal) {
+    fprintf(stderr, "[%s:%d %s] ERROR: %s: %s\n",
+            __FILE__, __LINE__, __func__, msg, strerror(errno));
+    if (fatal)
+        exit(EXIT_FAILURE);
+}
+
 /*
- * Print the command-line usage information.
+ * Print usage information.
  */
 static void usage(void) {
     fprintf(stderr,
@@ -96,39 +105,37 @@ static void usage(void) {
  * Print version information.
  */
 static void version(void) {
-    fprintf(stdout, "cc version 1.0\n");
+    printf("cc version 1.1\n");
 }
 
 /*
- * Return the size of a file in bytes.
- * On error, prints a detailed message and returns -1.
+ * Retrieve file size in bytes.
+ * Returns -1 on error (and logs a detailed error message).
  */
 static long long get_file_size(const char *fname) {
     FILE *f = fopen(fname, "rb");
-    if (!f) { REPORT_ERROR(fname); return -1; }
-    if (fseek(f, 0, SEEK_END) != 0) { REPORT_ERROR("fseek failed"); fclose(f); return -1; }
+    if (!f) { log_error(fname, 0); return -1; }
+    if (fseek(f, 0, SEEK_END) != 0) { log_error("fseek failed", 0); fclose(f); return -1; }
     long long size = ftell(f);
-    if (size < 0) REPORT_ERROR("ftell failed");
+    if (size < 0) log_error("ftell failed", 0);
     fclose(f);
     return size;
 }
 
 /*
- * Process a line buffer with optional formatting.
- * This function uses a fast path if no per-character formatting is required.
+ * Process a single line with optional formatting.
+ * Uses a fast path when no transformations are requested.
  */
-static void process_line_buffer(const char *line, size_t len, Options *opts, int *line_no) {
+static inline void process_line_buffer(const char *line, size_t len, Options *opts, int *line_no) {
     int is_blank = (len == 1 && line[0] == '\n');
     if (opts->flag_num || (opts->flag_nnb && !is_blank))
         printf(opts->line_format, (*line_no)++);
 
-    /* Fast path: if no transformations are requested, output the line directly */
     if (!opts->flag_tabs && !opts->flag_nonprinting && !opts->flag_ends) {
         if (fwrite(line, 1, len, stdout) != len)
-            REPORT_ERROR("fwrite failed in fast path");
+            log_error("fwrite failed in fast path", 0);
         return;
     }
-    /* Slow path: per-character processing for formatting */
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)line[i];
         if (c == '\t' && opts->flag_tabs)
@@ -149,11 +156,10 @@ static void process_line_buffer(const char *line, size_t len, Options *opts, int
 
 /*
  * Process a text file line by line.
- * Uses fgets() with a fixed buffer and avoids extra copying.
  */
 static void process_text(const char *fname, Options *opts, int *line_no) {
     FILE *f = (strcmp(fname, "-") ? fopen(fname, "r") : stdin);
-    if (!f) { REPORT_ERROR(fname); return; }
+    if (!f) { log_error(fname, 0); return; }
     char buf[BUFSIZE];
     int blank_count = 0;
     while (fgets(buf, sizeof(buf), f)) {
@@ -167,8 +173,10 @@ static void process_text(const char *fname, Options *opts, int *line_no) {
         }
         process_line_buffer(buf, len, opts, line_no);
     }
+    if (ferror(f))
+        log_error("Error reading file", 0);
     if (f != stdin && fclose(f) != 0)
-        REPORT_ERROR("Failed to close file in process_text");
+        log_error("Failed to close file in process_text", 0);
 }
 
 /*
@@ -176,38 +184,39 @@ static void process_text(const char *fname, Options *opts, int *line_no) {
  */
 static void process_binary(const char *fname) {
     FILE *f = (strcmp(fname, "-") ? fopen(fname, "rb") : stdin);
-    if (!f) { REPORT_ERROR(fname); return; }
+    if (!f) { log_error(fname, 0); return; }
     char buf[BUFSIZE];
     size_t n;
     while ((n = fread(buf, 1, BUFSIZE, f)) > 0) {
         if (fwrite(buf, 1, n, stdout) != n) {
-            REPORT_ERROR("fwrite failed in process_binary");
+            log_error("fwrite failed in process_binary", 0);
             break;
         }
     }
+    if (ferror(f))
+        log_error("Error reading binary file", 0);
     if (f != stdin && fclose(f) != 0)
-        REPORT_ERROR("Failed to close file in process_binary");
+        log_error("Failed to close file in process_binary", 0);
 }
 
 #ifdef _WIN32
 /*
- * Process a file using memory mapping on Windows.
- * Efficiently handles large files with optional text processing.
+ * Process file using memory mapping on Windows.
  */
 static void process_file_mmap(const char *fname, int text_mode, Options *opts, int *line_no) {
     HANDLE hFile = CreateFileA(fname, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) { REPORT_ERROR("Error opening file"); return; }
+    if (hFile == INVALID_HANDLE_VALUE) { log_error("Error opening file", 0); return; }
     LARGE_INTEGER fsize;
-    if (!GetFileSizeEx(hFile, &fsize)) { REPORT_ERROR("GetFileSizeEx failed"); CloseHandle(hFile); return; }
+    if (!GetFileSizeEx(hFile, &fsize)) { log_error("GetFileSizeEx failed", 0); CloseHandle(hFile); return; }
     if (fsize.QuadPart == 0) { CloseHandle(hFile); return; }
     HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (!hMap) { REPORT_ERROR("CreateFileMapping failed"); CloseHandle(hFile); return; }
+    if (!hMap) { log_error("CreateFileMapping failed", 0); CloseHandle(hFile); return; }
     char *data = (char*)MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
-    if (!data) { REPORT_ERROR("MapViewOfFile failed"); CloseHandle(hMap); CloseHandle(hFile); return; }
+    if (!data) { log_error("MapViewOfFile failed", 0); CloseHandle(hMap); CloseHandle(hFile); return; }
     size_t size = (size_t)fsize.QuadPart;
     if (!text_mode) {
         if (fwrite(data, 1, size, stdout) != size)
-            REPORT_ERROR("fwrite failed in mmap binary mode");
+            log_error("fwrite failed in mmap binary mode", 0);
     } else {
         int blank_count = 0;
         size_t i = 0;
@@ -231,21 +240,20 @@ static void process_file_mmap(const char *fname, int text_mode, Options *opts, i
 }
 #else
 /*
- * Process a file using memory mapping on POSIX systems.
- * Provides efficient access for large files while applying text processing if needed.
+ * Process file using memory mapping on POSIX systems.
  */
 static void process_file_mmap(const char *fname, int text_mode, Options *opts, int *line_no) {
     int fd = open(fname, O_RDONLY);
-    if (fd < 0) { REPORT_ERROR(fname); return; }
+    if (fd < 0) { log_error(fname, 0); return; }
     struct stat st;
-    if (fstat(fd, &st) < 0) { REPORT_ERROR("fstat failed"); close(fd); return; }
+    if (fstat(fd, &st) < 0) { log_error("fstat failed", 0); close(fd); return; }
     if (st.st_size == 0) { close(fd); return; }
     char *data = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-    if (data == MAP_FAILED) { REPORT_ERROR("mmap failed"); close(fd); return; }
+    if (data == MAP_FAILED) { log_error("mmap failed", 0); close(fd); return; }
     size_t size = st.st_size;
     if (!text_mode) {
         if (fwrite(data, 1, size, stdout) != size)
-            REPORT_ERROR("fwrite failed in mmap binary mode");
+            log_error("fwrite failed in mmap binary mode", 0);
     } else {
         int blank_count = 0;
         size_t i = 0;
@@ -264,27 +272,44 @@ static void process_file_mmap(const char *fname, int text_mode, Options *opts, i
         }
     }
     if (munmap(data, st.st_size) < 0)
-        REPORT_ERROR("munmap failed");
+        log_error("munmap failed", 0);
     if (close(fd) < 0)
-        REPORT_ERROR("close failed for mmap file");
+        log_error("close failed for mmap file", 0);
 }
 #endif
 
+/* Global flag for follow mode termination */
+static volatile sig_atomic_t stop_follow = 0;
+
+/*
+ * Signal handler for graceful termination (e.g., on SIGINT).
+ */
+static void handle_sigint(int sig) {
+    (void)sig; /* Unused parameter */
+    stop_follow = 1;
+}
+
 /*
  * Follow mode processing (tail -f style) for text files.
- * Periodically checks the file for new data, reporting errors without halting.
+ * This loop now checks for SIGINT to allow graceful exit.
  */
 static void process_follow_text(const char *fname, Options *opts, int *line_no) {
     FILE *f = fopen(fname, "r");
-    if (!f) { REPORT_ERROR(fname); return; }
-    if (fseek(f, 0, SEEK_END) != 0) { REPORT_ERROR("Initial fseek failed in follow mode"); fclose(f); return; }
+    if (!f) { log_error(fname, 0); return; }
+    if (fseek(f, 0, SEEK_END) != 0) { log_error("Initial fseek failed in follow mode", 0); fclose(f); return; }
     long current_offset = ftell(f);
-    if (current_offset < 0) { REPORT_ERROR("Initial ftell failed in follow mode"); fclose(f); return; }
+    if (current_offset < 0) { log_error("Initial ftell failed in follow mode", 0); fclose(f); return; }
+
+    /* Register signal handler for graceful termination */
+    #ifndef _WIN32
+    signal(SIGINT, handle_sigint);
+    #endif
+
     char buf[BUFSIZE];
-    for (;;) {
+    while (!stop_follow) {
         struct stat st;
         if (stat(fname, &st) < 0) {
-            REPORT_ERROR("stat failed in follow mode");
+            log_error("stat failed in follow mode", 0);
 #ifdef _WIN32
             Sleep(1000);
 #else
@@ -294,7 +319,7 @@ static void process_follow_text(const char *fname, Options *opts, int *line_no) 
         }
         if (st.st_size > (size_t)current_offset) {
             if (fseek(f, current_offset, SEEK_SET) != 0) {
-                REPORT_ERROR("fseek failed in follow mode");
+                log_error("fseek failed in follow mode", 0);
                 break;
             }
             while (fgets(buf, sizeof(buf), f)) {
@@ -302,6 +327,8 @@ static void process_follow_text(const char *fname, Options *opts, int *line_no) 
                 current_offset = ftell(f);
                 process_line_buffer(buf, len, opts, line_no);
             }
+            if (ferror(f))
+                log_error("Error reading in follow mode", 0);
         }
 #ifdef _WIN32
         Sleep(1000);
@@ -314,12 +341,12 @@ static void process_follow_text(const char *fname, Options *opts, int *line_no) 
 
 /*
  * Parse command-line flags and collect file names.
- * Exits on allocation or flag parsing errors.
+ * Exits immediately on allocation or parsing errors.
  */
 static int parse_global_flags(int argc, char *argv[], Options *opts, char ***file_list) {
     int fileCount = 0, parsing_flags = 1;
     char **files = malloc(sizeof(char*) * argc);
-    if (!files) { REPORT_ERROR("malloc failed in parse_global_flags"); exit(EXIT_FAILURE); }
+    if (!files) { log_error("malloc failed in parse_global_flags", 1); }
     for (int i = 1; i < argc; i++) {
         char *arg = argv[i];
         if (parsing_flags && strcmp(arg, "--") == 0) { parsing_flags = 0; continue; }
@@ -360,6 +387,7 @@ static int parse_global_flags(int argc, char *argv[], Options *opts, char ***fil
 /*
  * Main entry point.
  * Determines processing mode (text, binary, follow, or memory mapping) and handles each file.
+ * If no file is specified and STDIN is interactive, usage is printed to avoid hanging.
  */
 int main(int argc, char *argv[]) {
 #ifdef _WIN32
@@ -370,6 +398,16 @@ int main(int argc, char *argv[]) {
     Options opts = global_defaults;
     char **files;
     int fileCount = parse_global_flags(argc, argv, &opts, &files);
+
+    /* If running interactively with no file redirection, show usage instead of hanging */
+    if (fileCount == 1 && strcmp(files[0], "-") == 0) {
+#ifdef _WIN32
+        if (_isatty(_fileno(stdin))) { usage(); free(files); return EXIT_SUCCESS; }
+#else
+        if (isatty(fileno(stdin))) { usage(); free(files); return EXIT_SUCCESS; }
+#endif
+    }
+
     int use_text = (opts.flag_num || opts.flag_nnb || opts.flag_squeeze ||
                     opts.flag_ends || opts.flag_tabs || opts.flag_nonprinting);
     int line_no = 1;
@@ -381,10 +419,7 @@ int main(int argc, char *argv[]) {
         }
         int use_mmap_local = (strcmp(fname, "-") && (get_file_size(fname) >= MMAP_THRESHOLD));
         if (use_mmap_local) {
-            if (use_text)
-                process_file_mmap(fname, 1, &opts, &line_no);
-            else
-                process_file_mmap(fname, 0, &opts, &line_no);
+            process_file_mmap(fname, use_text, &opts, &line_no);
         } else {
             if (use_text)
                 process_text(fname, &opts, &line_no);
