@@ -2,7 +2,7 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/cc/actions)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0-blue.svg)](https://github.com/itlwas/cc/releases)
+[![Version](https://img.shields.io/badge/version-1.1-blue.svg)](https://github.com/itlwas/cc/releases)
 [![Stars](https://img.shields.io/github/stars/itlwas/cc.svg)](https://github.com/itlwas/cc/stargazers)
 [![Forks](https://img.shields.io/github/forks/itlwas/cc.svg)](https://github.com/itlwas/cc/network)
 
